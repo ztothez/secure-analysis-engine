@@ -50,19 +50,33 @@ def build_logger() -> logging.Logger:
     return logger
 
 
-def validate_input_directory(directory: Path) -> Path:
-    resolved = directory.resolve()
+def _resolve_under_base(path: Path, base_dir: Path) -> Path:
+    base = base_dir.resolve()
+    candidate = path if path.is_absolute() else base / path
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("Path must stay within the configured base directory") from exc
+    return resolved
+
+
+def validate_input_directory(directory: Path, base_dir: Path | None = None) -> Path:
+    resolved = _resolve_under_base(directory, base_dir or directory.parent)
     if not resolved.exists() or not resolved.is_dir():
         raise ValueError("Input directory does not exist or is not a directory")
     return resolved
 
 
-def safe_output_path(output_file: Path) -> Path:
-    output_dir = output_file.parent.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    resolved = output_file.resolve()
-    if output_dir not in resolved.parents and output_dir != resolved:
-        raise ValueError("Refusing to write report outside output directory")
+def safe_output_path(output_file: Path, base_dir: Path | None = None) -> Path:
+    base = (base_dir or output_file.parent).resolve()
+    candidate = output_file if output_file.is_absolute() else base / output_file
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("Refusing to write report outside output directory") from exc
+    resolved.parent.mkdir(parents=True, exist_ok=True)
     return resolved
 
 
@@ -111,10 +125,15 @@ def _extract_ip(line: str) -> str:
     return match_ip.group() if match_ip else "Unknown"
 
 
-def analyze_logs(directory: Path, output_file: Path, ignore_date: datetime = DEFAULT_IGNORE_DATE) -> dict[str, list[Finding]]:
+def analyze_logs(
+    directory: Path,
+    output_file: Path,
+    ignore_date: datetime = DEFAULT_IGNORE_DATE,
+    base_dir: Path | None = None,
+) -> dict[str, list[Finding]]:
     logger = build_logger()
-    input_dir = validate_input_directory(directory)
-    report_path = safe_output_path(output_file)
+    input_dir = validate_input_directory(directory, base_dir)
+    report_path = safe_output_path(output_file, base_dir)
 
     findings: dict[str, list[Finding]] = defaultdict(list)
 
@@ -203,11 +222,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_cli_paths(input_dir: str, output_file: str, base_dir: Path) -> tuple[Path, Path]:
+    trusted_base = base_dir.resolve()
+    safe_input_dir = validate_input_directory(Path(input_dir), trusted_base)
+    safe_report_path = safe_output_path(Path(output_file), trusted_base)
+    return safe_input_dir, safe_report_path
+
+
 def main() -> int:
     args = parse_args()
     try:
         ignore_date = datetime.strptime(args.ignore_after, "%Y-%m-%d")
-        analyze_logs(Path(args.input_dir), Path(args.output), ignore_date=ignore_date)
+        input_dir, report_path = resolve_cli_paths(args.input_dir, args.output, Path.cwd())
+        analyze_logs(input_dir, report_path, ignore_date=ignore_date, base_dir=Path.cwd())
         return 0
     except ValueError as exc:
         print(f"Input validation error: {exc}")

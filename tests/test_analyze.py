@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from analyze import _extract_date, analyze_logs, is_text_log, safe_output_path, validate_input_directory
+from analyze import _extract_date, analyze_logs, is_text_log, resolve_cli_paths, safe_output_path, validate_input_directory
 
 
 def test_validate_input_directory_rejects_missing(tmp_path: Path) -> None:
@@ -13,9 +13,33 @@ def test_validate_input_directory_rejects_missing(tmp_path: Path) -> None:
         validate_input_directory(tmp_path / "missing")
 
 
+def test_validate_input_directory_rejects_path_traversal(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    base.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with pytest.raises(ValueError):
+        validate_input_directory(base / ".." / "outside", base)
+
+
 def test_safe_output_path_accepts_path(tmp_path: Path) -> None:
     out = safe_output_path(tmp_path / "report.txt")
     assert out.name == "report.txt"
+
+
+def test_safe_output_path_rejects_path_traversal(tmp_path: Path) -> None:
+    base = tmp_path / "reports"
+    base.mkdir()
+    with pytest.raises(ValueError):
+        safe_output_path(Path("../report.txt"), base)
+
+
+def test_resolve_cli_paths_rejects_tainted_args(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    base.mkdir()
+    (tmp_path / "outside").mkdir()
+    with pytest.raises(ValueError):
+        resolve_cli_paths("../outside", "report.txt", base)
 
 
 def test_is_text_log_accepts_rotated_and_xorg() -> None:
